@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#007bff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="ゆずPOS">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta charset="UTF-8">
+<title>【POS】ダイニング・バル・ゆず。</title>
+<style>
+  body { font-family: monospace; margin:0; padding:10px; }
+  .container { display: grid; grid-template-columns: 30% 70%; gap: 15px; height: 100vh; box-sizing: border-box; }
+  .left { border-right: 2px solid #ccc; padding: 10px; overflow-y: auto; }
+  #cart { margin: 10px 0; border: 1px solid #000; padding: 6px; }
+  #cart ul { padding-left: 18px; }
+  button.small { font-size: 12px; margin-left: 4px; }
+  .payment-method button { margin: 5px; padding: 10px 20px; font-size: 16px; border-radius: 8px; }
+  .payment-method button.active { background: #007bff; color: #fff; }
+  .calc { display: grid; grid-template-columns: repeat(3, 90px); gap: 10px; margin: 20px 0; justify-content: center; }
+  .calc button { padding: 20px; font-size: 24px; border-radius: 16px; border: none; background-color: #f0f0f0; cursor: pointer; box-shadow: 0 3px 6px rgba(0,0,0,0.2); transition: 0.2s; }
+  .calc button:hover { background-color: #e0e0e0; transform: translateY(-2px); }
+  #amountInput { font-size:20px; width:210px; text-align:right; padding:5px; }
+  .right { padding: 10px; overflow-y: auto; }
+  .menu { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .menu button { aspect-ratio: 8 / 5; width: 80%; font-size: 18px; border-radius: 15px; }
+  #receipt { display: none; font-family: monospace; width: 58mm; font-size: 10pt; line-height: 1.1; padding: 2mm; }
+  #receipt hr { border: none; border-top: 1px solid #000; margin: 2px 0; }
+  @media print {
+        #receipt { display: block !important; width: 58mm; font-size: 10pt; line-height: 1.1; page-break-inside: avoid; }
+        #receipt hr { border: none; border-top: 1px solid #000; margin: 2px 0; }
+    }
+  .action-btn { padding: 10px 20px; font-size: 16px; border-radius: 8px; margin: 5px 5px 5px 0; border: none; color: #fff; cursor: pointer; transition: 0.2s; }
+  /* 個別カラー */
+  .action-btn.confirm { background-color: #28a745; }
+  .action-btn.print   { background-color: #007bff; } 
+  .action-btn.export  { background-color: #ccc; }
+  .action-btn.reset   { background-color: #ccc; } 
+  /* ホバー効果 */
+  .action-btn:hover { opacity: 0.85; }
+  /* モーダル背景 */
+  .popup-modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(0,0,0,0.4); justify-content: center; align-items: center; z-index: 1000; }
+  /* モーダル本体 */
+  .popup-content { background-color: #fff; padding: 30px 40px; border-radius: 16px; text-align: center; box-shadow: 0 6px 12px rgba(0,0,0,0.3); min-width: 260px; max-width: 90%; font-size: 20px; }
+  /* OKボタン */
+  .popup-content button { margin-top: 25px; padding: 16px 32px; border-radius: 12px; border: none; background-color: #0d76ff; color: #fff; font-size: 18px; cursor: pointer; }
+  .popup-content button:hover { background-color: #095acc; }
+
+  #paymentModal .modal-buttons { display: flex; justify-content: space-between; gap: 10px; margin-top: 15px; }
+
+  #paymentModal button { flex: 1; font-size: 22px; padding: 12px 0; border: none; border-radius: 8px; cursor: pointer; transition: 0.2s; }
+
+  .btn-confirm { background-color: #4CAF50; color: #fff; }
+  .btn-confirm:hover { background-color: #45a049; }
+
+  .btn-cancel { background-color: #f44336; color: #fff; }
+  .btn-cancel:hover { background-color: #d32f2f; }
+
+  #paymentModal button:last-of-type { background-color: #f44336; color: #fff; }
+  #paymentModal button:last-of-type:hover { background-color: #d32f2f; }
+  #productMasterList { list-style: none; padding: 0; margin: 0; }
+  .product-item { display: flex; justify-content: space-between; align-items: center; margin: 5px 0; padding: 5px; border-bottom: 1px solid #ddd; }
+  .btn-box { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+  .btn-box button { background: none; border: none; font-size: 18px; cursor: pointer; line-height: 1; }
+  .btn-box button:hover { opacity: 0.7; }
+  .toggle-btn { background: none; border: none; cursor: pointer; font-size: 14px; margin-left: 8px; }
+  .section-content { margin: 5px 0 15px 0; }
+</style>
+</head>
+<body>
+
+
+<div class="container">
+  <div class="left">
+    <h2 style="display: flex; align-items: center; gap: 10px;">
+        <img src="diningbar_yuzu_OL2.PNG" alt="ロゴ" style="height:100px;">
+        ダイニング・バル・ゆず。
+    </h2>
+    
+    <div id="cart">
+      <h3>カート内容</h3>
+      <ul id="cartList"></ul>
+      <p>合計: <span id="total">0</span> 円</p>
+    </div>
+
+    <div class="payment-method">
+      <h3>支払方法</h3>
+      <button onclick="setPayment('現金')">現金</button>
+      <button onclick="setPayment('クレジット')">クレジット</button>
+      <button onclick="setPayment('PayPay')">PayPay</button>
+    </div>
+
+    <div id="paymentModal" style="display:none; position:fixed;font-size: 20px; top:0; left:0; width:100%; height:100%; 
+            background: rgba(0,0,0,0.5); justify-content:center; align-items:center;">
+        <div style="background:#fff; padding:20px; border-radius:10px; width:300px; text-align:center;">
+            <h3>預り金入力</h3>
+            <input type="text" id="modalAmountInput" readonly style="font-size:20px; width:100%; text-align:right;">
+            <div class="calc" id="modalCalcPad"></div>
+            <p>おつり: <span id="modalChange">0</span> 円</p>
+
+            <!-- ボタンをラップ -->
+            <div class="modal-buttons">
+                <button class="btn-confirm" onclick="confirmPayment()">確定</button>
+                <button class="btn-cancel" onclick="closeModal()">キャンセル</button>
+            </div>
+
+        </div>
+    </div>
+
+    
+    <button class="action-btn confirm" onclick="confirmOrder()">会計確定</button>
+    <button class="action-btn print" onclick="printKitchen()">キッチン伝票印刷</button>
+    
+    <hr>
+      <h3>
+        売上集計 
+        <button class="toggle-btn" onclick="toggleSection('salesSummary', this)">▼</button>
+      </h3>
+      <div id="salesSummary" class="section-content">
+        <ul id="salesList"></ul>
+        <p>累計売上: <span id="salesTotal">0</span> 円</p>
+      </div>
+    <hr>
+    <h3>
+      商品別売上 
+      <button class="toggle-btn" onclick="toggleSection('itemSummary', this)">▼</button>
+    </h3>
+    <div id="itemSummary" class="section-content">
+      <ul id="productSummary"></ul>
+    </div>
+    <h3>
+      決済方法別売上 
+      <button class="toggle-btn" onclick="toggleSection('paymentSummary', this)">▼</button>
+    </h3>
+    <div id="paymentSummary" class="section-content">
+      <ul id="paymentSummary"></ul>
+    </div>
+    <button class="action-btn export" onclick="exportCSV()">CSVエクスポート</button>
+    <button class="action-btn reset" onclick="resetSales()">売上履歴リセット</button>
+
+    <hr>
+    <h3>
+      商品マスタ管理 
+      <button class="toggle-btn" onclick="toggleSection('productMaster', this)">▼</button>
+    </h3>
+    <div id="productMaster" class="section-content">      <input type="text" id="newProductName" placeholder="商品名" style="width:120px;">
+      <input type="number" id="newProductPrice" placeholder="単価" style="width:80px;">
+      <button onclick="addProduct()">追加</button>
+      <ul id="productMasterList"></ul>
+    </div>
+
+  </div>
+    
+  <div class="right">
+    <h3>メニュー</h3>
+    <div class="menu" id="menu"></div>
+  </div>
+</div>
+
+<!-- ポップアップ用モーダル -->
+<div id="popupModal" class="popup-modal">
+  <div class="popup-content">
+    <p id="popupMessage"></p>
+    <button onclick="closePopup()">OK</button>
+  </div>
+</div>
+
+<div id="receipt"></div>
+
+<script>
+const products = [
+  { name: "ざんぎ", price: 700 }, { name: "ミニカップ", price: 350 },
+  { name: "フランクフルト", price: 400 }, { name: "きゅうり", price: 300 },
+  { name: "かき氷", price: 400 }, { name: "フルーツポンチ", price: 600 },
+  { name: "アマゴ", price: 600 }, { name: "生ビール", price: 700 },
+  { name: "レモンサワー", price: 600 }, { name: "ハイボール", price: 600 },
+  { name: "焼酎(水・ソーダ)", price: 600 }, { name: "梅干し", price: 100 },
+  { name: "ノンアル", price: 500 }, { name: "コーラ", price: 300 },
+  { name: "リンゴ", price: 300 }, { name: "カルピス", price: 300 },
+  { name: "ICEコーヒー", price: 400 }, { name: "レモネード(水・ソーダ)", price: 400 },
+  { name: "オレンジ", price: 600 }, { name: "グレープフルーツ", price: 600 },
+  { name: "オレンジスカッシュ", price: 700 }, { name: "グレフルスカッシュ", price: 700 },
+  { name: "レモンスカッシュ", price: 700 }
+];
+
+let cart = [];
+let sales = [];
+let paymentMethod = "現金";
+
+if(localStorage.getItem("sales")){
+  sales = JSON.parse(localStorage.getItem("sales"));
+  renderSales();
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  setPayment("現金");
+});
+
+const menuDiv = document.getElementById("menu");
+products.forEach((p) => {
+  let btn = document.createElement("button");
+  btn.textContent = `${p.name}\n${p.price}円`;
+  btn.onclick = () => addToCart(p);
+  menuDiv.appendChild(btn);
+});
+
+function addToCart(p) {
+  let found = cart.find(i => i.name === p.name);
+  if(found){ found.qty++; } 
+  else { cart.push({ ...p, qty: 1 }); }
+  renderCart();
+}
+
+function renderCart() {
+  const list = document.getElementById("cartList");
+  list.innerHTML = "";
+  let total = 0;
+  cart.forEach((item, i) => {
+    let li = document.createElement("li");
+    li.textContent = `${item.name} - ${item.price}円 x${item.qty}`;
+    total += item.price * item.qty;
+    let plusBtn = document.createElement("button");
+    plusBtn.textContent = "＋"; plusBtn.className="small";
+    plusBtn.onclick = ()=>{ item.qty++; renderCart(); };
+    let minusBtn = document.createElement("button");
+    minusBtn.textContent = "－"; minusBtn.className="small";
+    minusBtn.onclick = ()=>{ item.qty--; if(item.qty<=0) cart.splice(i,1); renderCart(); };
+    let delBtn = document.createElement("button");
+    delBtn.textContent="🗑️"; delBtn.className="small";
+    delBtn.onclick=()=>{ cart.splice(i,1); renderCart(); };
+    li.appendChild(plusBtn); li.appendChild(minusBtn); li.appendChild(delBtn);
+    list.appendChild(li);
+  });
+  document.getElementById("total").textContent = total;
+}
+
+function setPayment(method){
+  paymentMethod = method;
+  document.querySelectorAll(".payment-method button").forEach(btn=>{
+    btn.classList.remove("active");
+    if(btn.textContent===method) btn.classList.add("active");
+  });
+}
+
+function confirmOrder() {
+  if(cart.length === 0) return showPopup("カートが空です。");
+  if(!paymentMethod) return showPopup("支払方法を選択してください。");
+  openModal();
+}
+
+function openModal() {
+  const input = document.getElementById("modalAmountInput");
+  document.getElementById("paymentModal").style.display = "flex";
+
+  const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+  input.value = total;
+
+  input.dataset.isEdited = "false"; // 初期状態に戻す
+  updateModalChange();
+}
+
+
+function closeModal(){
+  document.getElementById("paymentModal").style.display="none";
+}
+
+const modalCalcPad = document.getElementById("modalCalcPad");
+
+["7","8","9","4","5","6","1","2","3","0","00","C"].forEach(v=>{
+  let b = document.createElement("button");
+  b.textContent=v;
+  b.onclick=()=>{
+    let input = document.getElementById("modalAmountInput");
+
+    // 初期値フラグ判定
+    if (input.dataset.isEdited !== "true") {
+      input.value = ""; 
+      input.dataset.isEdited = "true";
+    }
+
+    if (v === "C") {
+      input.value = "";
+    } else {
+      // 入力候補
+      let newVal = input.value + v;
+
+      // 先頭ゼロ禁止
+      if (newVal.length > 1 && newVal[0] === "0") {
+        newVal = newVal.replace(/^0+/, ""); 
+      }
+
+      // 桁数制限（6桁まで）
+      if (newVal.length > 6) {
+        return; // これ以上追加しない
+      }
+
+      input.value = newVal;
+    }
+
+    updateModalChange();
+  };
+  modalCalcPad.appendChild(b);
+});
+
+
+function updateModalChange(){
+  let total = cart.reduce((sum,i)=>sum+i.price*i.qty,0);
+  let paid = parseInt(document.getElementById("modalAmountInput").value||0,10);
+  document.getElementById("modalChange").textContent = (paid-total)>=0?(paid-total):0;
+}
+
+function confirmPayment(){
+  let total = cart.reduce((sum,i)=>sum+i.price*i.qty,0);
+  let paid = parseInt(document.getElementById("modalAmountInput").value||0,10);
+
+  if(isNaN(paid) || paid < total) {
+    showPopup("預り金が不足しています。");
+    return;
+  }
+
+  let change = paid - total;
+
+  // 1回目のポップアップ「おつり」
+  showPopup("おつり: " + change + "円","30px");
+
+  // OKボタンを差し替え
+  const popupBtn = document.querySelector("#popupModal .popup-content button");
+  popupBtn.onclick = function() {
+    closePopup();
+
+    // 売上登録処理
+    let now = new Date();
+    sales.push({ items: [...cart], total, datetime: now.toLocaleString(), method: paymentMethod });
+    localStorage.setItem("sales", JSON.stringify(sales));
+    renderSales();
+    cart = [];
+    renderCart();
+    closeModal();
+
+    // 2回目のポップアップ「会計確定しました」
+    showPopup("会計確定しました。");
+
+    // ボタン動作を元に戻す
+    popupBtn.onclick = closePopup;
+
+    // ★会計確定後は支払方法を現金に戻す
+    setPayment("現金");
+
+  };
+}
+
+function renderSales() {
+  const list = document.getElementById("salesList");
+  list.innerHTML = "";
+  let sum = 0;
+  let productSummary = {};
+  let paymentSummary = {};
+  sales.forEach((s, idx) => {
+    let li = document.createElement("li");
+    li.textContent = `No.${idx+1} 合計 ${s.total}円 (${s.items.reduce((q,i)=>q+i.qty,0)}点) [${s.datetime}] [${s.method}]`;
+    list.appendChild(li);
+    sum += s.total;
+    s.items.forEach(i=>{
+      if(!productSummary[i.name]) productSummary[i.name] = 0;
+      productSummary[i.name] += i.qty;   // ← 金額ではなく数量
+    });
+    if(!paymentSummary[s.method]) paymentSummary[s.method]=0;
+    paymentSummary[s.method]+=s.total;
+  });
+  document.getElementById("salesTotal").textContent = sum;
+  const ps = document.getElementById("productSummary"); 
+  ps.innerHTML="";
+  for(let k in productSummary){
+    let li=document.createElement("li");
+    li.textContent=`${k}: ${productSummary[k]}点`;  // ← 円 → 点
+    ps.appendChild(li);
+  }
+  const pm = document.getElementById("paymentSummary"); pm.innerHTML="";
+  for(let k in paymentSummary){ let li=document.createElement("li"); li.textContent=`${k}: ${paymentSummary[k]}円`; pm.appendChild(li);}
+}
+
+function renderProductMaster() {
+  const list = document.getElementById("productMasterList");
+  list.innerHTML = "";
+  products.forEach((p, idx) => {
+    let li = document.createElement("li");
+    li.className = "product-item";
+
+    // 商品名
+    let nameSpan = document.createElement("span");
+    nameSpan.textContent = `${p.name} (${p.price}円)`;
+
+    // ボタンコンテナ
+    let btnBox = document.createElement("div");
+    btnBox.className = "btn-box";
+
+    // 編集ボタン（✏️）
+    let editBtn = document.createElement("button");
+    editBtn.textContent = "✏️";
+    editBtn.title = "編集";
+    editBtn.onclick = () => {
+      let newName = prompt("商品名を入力:", p.name);
+      if(newName) p.name = newName;
+      let newPrice = prompt("単価を入力:", p.price);
+      if(newPrice && !isNaN(newPrice)) p.price = parseInt(newPrice,10);
+      saveProducts();
+      renderProductMaster();
+      renderMenu();
+    };
+
+    // 削除ボタン（🗑️）
+    let delBtn = document.createElement("button");
+    delBtn.textContent = "🗑️";
+    delBtn.title = "削除";
+    delBtn.onclick = () => {
+      if(confirm("削除しますか？")){
+        products.splice(idx,1);
+        saveProducts();
+        renderProductMaster();
+        renderMenu();
+      }
+    };
+
+    btnBox.appendChild(editBtn);
+    btnBox.appendChild(delBtn);
+
+    li.appendChild(nameSpan);
+    li.appendChild(btnBox);
+    list.appendChild(li);
+  });
+}
+
+function addProduct(){
+  const name = document.getElementById("newProductName").value.trim();
+  const price = parseInt(document.getElementById("newProductPrice").value,10);
+  if(!name || isNaN(price)) return showPopup("商品名と単価を入力してください。");
+  products.push({ name, price });
+  saveProducts();
+  renderProductMaster();
+  renderMenu();
+  document.getElementById("newProductName").value="";
+  document.getElementById("newProductPrice").value="";
+}
+
+// --- メニュー再描画 ---
+function renderMenu(){
+  const menuDiv = document.getElementById("menu");
+  menuDiv.innerHTML = "";
+  products.forEach((p) => {
+    let btn = document.createElement("button");
+    btn.textContent = `${p.name}\n${p.price}円`;
+    btn.onclick = () => addToCart(p);
+    menuDiv.appendChild(btn);
+  });
+}
+
+// --- 永続化 ---
+function saveProducts(){
+  localStorage.setItem("products", JSON.stringify(products));
+}
+
+// 初期ロード
+if(localStorage.getItem("products")){
+  products.splice(0, products.length, ...JSON.parse(localStorage.getItem("products")));
+}
+renderProductMaster();
+renderMenu();
+
+
+function printKitchen() {
+  if (cart.length === 0) return showPopup("カートが空です。");
+
+  const now = new Date().toLocaleString();
+  const orderNo = sales.length + 1;
+
+  let html = `
+    <html>
+    <head>
+      <style>
+        @media print {
+          @page { size: 58mm auto; margin: 0; }
+          body { width: 58mm; font-size: 10pt; line-height: 1.2; margin: 0; }
+          hr { border: none; border-top: 1px solid #000; margin: 2px 0; }
+        }
+      </style>
+    </head>
+    <body>
+      <div style="text-align:center; font-weight:bold; font-size:12pt;">キッチン伝票</div>
+      <hr>
+      <div>日時: ${now}</div>
+      <div>No.${orderNo}</div>
+      <hr>
+  `;
+
+  cart.forEach(item => {
+    html += `${item.name} x${item.qty}<br>`;
+  });
+
+  html += `
+      <hr>
+      <div style="text-align:right;">合計: ${cart.reduce((s,i)=>s+i.price*i.qty,0)}円</div>
+    </body>
+    </html>
+  `;
+
+  let printWin = window.open("", "_blank");
+  printWin.document.write(html);
+  printWin.document.close();
+  printWin.focus();
+  printWin.print();
+  printWin.close();
+}
+
+
+
+function exportCSV() {
+  if(sales.length===0) return showPopup("売上データがありません。");
+  let csv = "No,日時,商品,数量,単価,小計,決済方法\n";
+  sales.forEach((s, idx) => {
+    s.items.forEach(i => { csv += `${idx+1},${s.datetime},${i.name},${i.qty},${i.price},${i.price*i.qty},${s.method}\n`; });
+    csv += `${idx+1},${s.datetime},合計,, ,${s.total},${s.method}\n`;
+  });
+  let bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
+  let blob = new Blob([bom, csv], {type:"text/csv"});
+  let url = URL.createObjectURL(blob);
+  let a = document.createElement("a");
+  a.href = url;
+  a.download = "sales.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function resetSales(){
+  if(confirm("売上履歴をリセットしますか？")){
+    sales=[]; localStorage.removeItem("sales");
+    renderSales();
+  }
+}
+
+function showPopup(message, fontSize = "20px") {
+  const modal = document.getElementById("popupModal");
+  const msgEl = document.getElementById("popupMessage");
+  msgEl.textContent = message;
+  msgEl.style.fontSize = fontSize; // ここでサイズ変更
+  modal.style.display = "flex";
+}
+
+
+function closePopup() {
+  document.getElementById("popupModal").style.display = "none";
+}
+
+function toggleSection(id, btn) {
+  const el = document.getElementById(id);
+  if (!el) return;
+
+  if (el.style.display === "none") {
+    el.style.display = "block";
+    btn.textContent = "▼";  // 開いたら下向き
+  } else {
+    el.style.display = "none";
+    btn.textContent = "▲";  // 閉じたら上向き
+  }
+}
+
+
+</script>
+<script>
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./service-worker.js")
+    .then(reg => console.log("Service Worker registered:", reg))
+    .catch(err => console.error("Service Worker failed:", err));
+}
+</script>
+
+</body>
+</html>
